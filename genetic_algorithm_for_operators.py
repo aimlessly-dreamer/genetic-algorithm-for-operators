@@ -7,19 +7,19 @@ from deap import algorithms, base, creator, tools
 
 
 # Search settings.
-NUM_GENERATIONS = 100
+NUM_GENERATIONS = 10
 POPULATION_SIZE = 100
 MAX_TERMS = 8  # Maximum number of column references in an expression.
-MAX_COLUMN_REPEATS = 3  # Each column may appear this many times per expression.
-MAX_COLUMN_MULTIPLIER = 3  # Each term may multiply its column by an integer from 1 to n.
+MAX_COLUMN_REPEATS = 2  # Each column may appear this many times per expression.
+MAX_COLUMN_CONSTANT = 5  # Integers from 1 to n for column multipliers, divisors or exponents.
 RANDOM_SEED = None  # Different runs; use an integer for reproducible results.
 
 # Random-only test preset: no selection, crossover or mutation; 100% fresh candidates.
 # Lower IMMIGRANT_FRACTION and increase mutation/crossover to resume evolution.
-CROSSOVER_PROBABILITY = 0.0
-MUTATION_PROBABILITY = 0.0
-GENE_MUTATION_PROBABILITY = 0.0
-IMMIGRANT_FRACTION = 1.0
+CROSSOVER_PROBABILITY = 0.10
+MUTATION_PROBABILITY = 0.10
+GENE_MUTATION_PROBABILITY = 0.10
+IMMIGRANT_FRACTION = 0.70
 
 
 # Comment out an operator to disable it; uncomment an optional one to enable it.
@@ -28,14 +28,22 @@ OPERATORS = {
     '-': operator.sub,
     '*': operator.mul,
     '/': operator.truediv,
-    '//': operator.floordiv,  # Floor division.
-    '**': operator.pow,  # Power.
+    ## '//': operator.floordiv,  # Floor division.
+    ## '**': operator.pow,  # Power.
 }
 
-# Unary transforms apply to raw columns, before integer multipliers and binary operations.
+# Operations with an integer constant are independent of operators between columns.
+# Comment out an entry to disable it.
+COLUMN_CONSTANT_OPERATORS = {
+    '*': operator.mul,  # n * Column.
+    '/': operator.truediv,  # Column / n.
+    '**': operator.pow,  # Column ** n.
+}
+
+# Unary transforms apply to raw columns, before constant operations and binary operations.
 TRANSFORMS = {
     None: lambda values: values,  # Leave the column unchanged.
-    'np.log': np.log,  # Natural logarithm; requires positive column values.
+    #  'np.log': np.log,  # Natural logarithm; requires positive column values.
 }
 
 
@@ -52,22 +60,31 @@ def create_demo_data(seed=42):
 
 
 def expression_key(individual):
-    """Keep column order and repetition, ignoring only the first incoming operator."""
-    selected = list(individual)
+    """Keep order and repetitions while normalizing unused and identity operations."""
+    selected = [
+        (index, symbol, transform,
+         None if constant == 1 and constant_symbol in ('*', '/', '**') else constant_symbol,
+         constant)
+        for index, symbol, transform, constant_symbol, constant in individual
+    ]
     if selected:
-        index, _, transform, multiplier = selected[0]
-        selected[0] = index, None, transform, multiplier
+        index, _, transform, constant_symbol, constant = selected[0]
+        selected[0] = index, None, transform, constant_symbol, constant
     return tuple(selected)
 
 
 def describe_individual(individual, column_names):
-    """Return the column terms (including transforms and multipliers) and operators."""
+    """Return column terms with transforms and constant operations, plus operators."""
     selected = expression_key(individual)
     columns = []
-    for index, _, transform, multiplier in selected:
+    for index, _, transform, constant_symbol, constant in selected:
         column = f'{transform}({column_names[index]})' if transform else column_names[index]
-        columns.append(f'({multiplier} * {column})' if multiplier != 1 else column)
-    symbols = [symbol for _, symbol, _, _ in selected[1:]]
+        if constant_symbol == '*':
+            column = f'({constant} * {column})'
+        elif constant_symbol is not None:
+            column = f'({column} {constant_symbol} {constant})'
+        columns.append(column)
+    symbols = [symbol for _, symbol, _, _, _ in selected[1:]]
     return columns, symbols
 
 
@@ -93,9 +110,11 @@ def evaluate(individual, data, target):
 
     result = None
     with np.errstate(divide='ignore', invalid='ignore', over='ignore'):
-        for index, symbol, transform, multiplier in selected:
-            # A log term is multiplier * np.log(column), never np.log(multiplier * column).
-            values = multiplier * TRANSFORMS[transform](data[:, index])
+        for index, symbol, transform, constant_symbol, constant in selected:
+            # Log transforms the raw column before multiplication, division or powers.
+            values = TRANSFORMS[transform](data[:, index])
+            if constant_symbol is not None:
+                values = COLUMN_CONSTANT_OPERATORS[constant_symbol](values, constant)
             if not np.isfinite(values).all():
                 return float('inf'),
             if result is None:
@@ -112,19 +131,20 @@ def evaluate(individual, data, target):
     return (float(mse),) if np.isfinite(mse) else (float('inf'),)
 
 
-def create_gene(num_columns, column_index=None, max_column_multiplier=MAX_COLUMN_MULTIPLIER):
-    """Choose a column, incoming operator, transform and positive integer multiplier."""
+def create_gene(num_columns, column_index=None, max_column_constant=MAX_COLUMN_CONSTANT):
+    """Choose a column, transform and operations with columns and an integer constant."""
     if column_index is None:
         column_index = random.randrange(num_columns)
     symbol = random.choice(tuple(OPERATORS))
     transforms = tuple(TRANSFORMS)
     transform = random.choice(transforms) if len(transforms) > 1 else transforms[0]
-    multiplier = random.randint(1, max_column_multiplier)
-    return column_index, symbol, transform, multiplier
+    constant_symbol = random.choice(tuple(COLUMN_CONSTANT_OPERATORS))
+    constant = random.randint(1, max_column_constant)
+    return column_index, symbol, transform, constant_symbol, constant
 
 
 def create_individual(num_columns, max_terms, max_column_repeats,
-                      max_column_multiplier=MAX_COLUMN_MULTIPLIER):
+                      max_column_constant=MAX_COLUMN_CONSTANT):
     """Create an expression with arbitrary column order and bounded repetition."""
     length = random.randint(1, min(max_terms, num_columns * max_column_repeats))
     counts = [0] * num_columns
@@ -132,7 +152,7 @@ def create_individual(num_columns, max_terms, max_column_repeats,
     genes = []
     for _ in range(length):
         column_index = random.choice(available)
-        genes.append(create_gene(num_columns, column_index, max_column_multiplier))
+        genes.append(create_gene(num_columns, column_index, max_column_constant))
         counts[column_index] += 1
         if counts[column_index] == max_column_repeats:
             available.remove(column_index)
@@ -140,7 +160,7 @@ def create_individual(num_columns, max_terms, max_column_repeats,
 
 
 def repair_individual(individual, num_columns, max_terms, max_column_repeats,
-                      max_column_multiplier=MAX_COLUMN_MULTIPLIER):
+                      max_column_constant=MAX_COLUMN_CONSTANT):
     """Keep a nonempty expression within the length and column-repeat limits."""
     counts = [0] * num_columns
     genes = []
@@ -152,12 +172,12 @@ def repair_individual(individual, num_columns, max_terms, max_column_repeats,
             if len(genes) == max_terms:
                 break
     individual[:] = genes or [create_gene(num_columns,
-                                         max_column_multiplier=max_column_multiplier)]
+                                         max_column_constant=max_column_constant)]
     return individual
 
 
 def mate(first, second, num_columns, max_terms, max_column_repeats,
-         max_column_multiplier=MAX_COLUMN_MULTIPLIER):
+         max_column_constant=MAX_COLUMN_CONSTANT):
     """Exchange variable-length expression segments, including single-term parents."""
     first_cut = random.randrange(len(first) + 1)
     second_cut = random.randrange(len(second) + 1)
@@ -165,15 +185,16 @@ def mate(first, second, num_columns, max_terms, max_column_repeats,
     second_genes = second[:second_cut] + first[first_cut:]
     first[:] = first_genes
     second[:] = second_genes
-    repair_individual(first, num_columns, max_terms, max_column_repeats, max_column_multiplier)
-    repair_individual(second, num_columns, max_terms, max_column_repeats, max_column_multiplier)
+    repair_individual(first, num_columns, max_terms, max_column_repeats, max_column_constant)
+    repair_individual(second, num_columns, max_terms, max_column_repeats, max_column_constant)
     return first, second
 
 
 def mutate(individual, indpb, num_columns, max_terms, max_column_repeats,
-           max_column_multiplier=MAX_COLUMN_MULTIPLIER):
-    """Change column terms and multipliers; add, remove or reorder terms."""
-    for index, (column_index, symbol, transform, multiplier) in enumerate(individual):
+           max_column_constant=MAX_COLUMN_CONSTANT):
+    """Change columns, transforms, constant operations and values; reorder terms."""
+    for index, gene in enumerate(individual):
+        column_index, symbol, transform, constant_symbol, constant = gene
         if random.random() < indpb:
             alternatives = tuple(column for column in range(num_columns)
                                  if column != column_index)
@@ -187,36 +208,40 @@ def mutate(individual, indpb, num_columns, max_terms, max_column_repeats,
         if alternatives and random.random() < indpb:
             transform = random.choice(alternatives)
         if random.random() < indpb:
-            alternatives = tuple(value for value in range(1, max_column_multiplier + 1)
-                                 if value != multiplier)
+            alternatives = tuple(op for op in COLUMN_CONSTANT_OPERATORS if op != constant_symbol)
             if alternatives:
-                multiplier = random.choice(alternatives)
-        individual[index] = column_index, symbol, transform, multiplier
+                constant_symbol = random.choice(alternatives)
+        if random.random() < indpb:
+            alternatives = tuple(value for value in range(1, max_column_constant + 1)
+                                 if value != constant)
+            if alternatives:
+                constant = random.choice(alternatives)
+        individual[index] = column_index, symbol, transform, constant_symbol, constant
 
     if random.random() < indpb and len(individual) < max_terms:
         individual.insert(random.randrange(len(individual) + 1),
-                          create_gene(num_columns, max_column_multiplier=max_column_multiplier))
+                          create_gene(num_columns, max_column_constant=max_column_constant))
     if random.random() < indpb and len(individual) > 1:
         del individual[random.randrange(len(individual))]
     if random.random() < indpb and len(individual) > 1:
         first, second = random.sample(range(len(individual)), 2)
         individual[first], individual[second] = individual[second], individual[first]
     repair_individual(individual, num_columns, max_terms, max_column_repeats,
-                      max_column_multiplier)
+                      max_column_constant)
     return individual,
 
 
 def main(dataframe=None, seed=RANDOM_SEED, population_size=POPULATION_SIZE,
          num_generations=NUM_GENERATIONS, max_terms=MAX_TERMS,
          max_column_repeats=MAX_COLUMN_REPEATS,
-         max_column_multiplier=MAX_COLUMN_MULTIPLIER):
+         max_column_constant=MAX_COLUMN_CONSTANT):
     """Search expressions for the demo or a numeric dataframe with a Result column."""
     if population_size < 1 or num_generations < 0:
         raise ValueError('Population size must be positive and generations nonnegative.')
     if max_terms < 1 or max_column_repeats < 1:
         raise ValueError('Expression length and column-repeat limits must be positive.')
-    if not isinstance(max_column_multiplier, int) or max_column_multiplier < 1:
-        raise ValueError('The column multiplier limit must be a positive integer.')
+    if not isinstance(max_column_constant, int) or max_column_constant < 1:
+        raise ValueError('The column constant limit must be a positive integer.')
     for name, probability in (
         ('CROSSOVER_PROBABILITY', CROSSOVER_PROBABILITY),
         ('MUTATION_PROBABILITY', MUTATION_PROBABILITY),
@@ -225,8 +250,8 @@ def main(dataframe=None, seed=RANDOM_SEED, population_size=POPULATION_SIZE,
     ):
         if not 0 <= probability <= 1:
             raise ValueError(f'{name} must be between 0 and 1.')
-    if not OPERATORS or not TRANSFORMS:
-        raise ValueError('Enable at least one binary operator and one column transform.')
+    if not OPERATORS or not TRANSFORMS or not COLUMN_CONSTANT_OPERATORS:
+        raise ValueError('Enable at least one binary operator, column transform and constant operator.')
 
     df = create_demo_data(seed) if dataframe is None else dataframe
     if df.empty or 'Result' not in df.columns:
@@ -252,17 +277,17 @@ def main(dataframe=None, seed=RANDOM_SEED, population_size=POPULATION_SIZE,
     toolbox = base.Toolbox()
     toolbox.register('individual', create_individual, num_columns=len(column_names),
                      max_terms=max_terms, max_column_repeats=max_column_repeats,
-                     max_column_multiplier=max_column_multiplier)
+                     max_column_constant=max_column_constant)
     toolbox.register('population', tools.initRepeat, list, toolbox.individual)
     toolbox.register('evaluate', evaluate, data=data, target=target)
     toolbox.register('select', tools.selTournament, tournsize=3)
     toolbox.register('mate', mate, num_columns=len(column_names),
                      max_terms=max_terms, max_column_repeats=max_column_repeats,
-                     max_column_multiplier=max_column_multiplier)
+                     max_column_constant=max_column_constant)
     toolbox.register('mutate', mutate, indpb=GENE_MUTATION_PROBABILITY,
                      num_columns=len(column_names), max_terms=max_terms,
                      max_column_repeats=max_column_repeats,
-                     max_column_multiplier=max_column_multiplier)
+                     max_column_constant=max_column_constant)
 
     population = toolbox.population(n=population_size)
     hall_of_fame = tools.HallOfFame(
