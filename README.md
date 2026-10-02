@@ -1,4 +1,4 @@
-This python script use DEAP (Distributed Evolutionary Algorithms) library to perform a genetic algorithm-based feature selection.  
+This python script uses DEAP (Distributed Evolutionary Algorithms) library to perform a genetic algorithm-based feature selection.  
 
 
         
