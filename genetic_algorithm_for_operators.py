@@ -6,6 +6,9 @@ import pandas as pd
 from deap import algorithms, base, creator, tools
 
 
+# Dataset setting: False creates demo data; True loads example_dataset.csv.
+USE_CSV_DATA = True
+
 # Search settings.
 NUM_GENERATIONS = 10
 POPULATION_SIZE = 10
@@ -340,9 +343,10 @@ def main(dataframe=None, seed=RANDOM_SEED, population_size=POPULATION_SIZE,
 
 
 if __name__ == '__main__':
-    # Load file dataset: uncomment these lines and comment out main() below.
-    # df = pd.read_csv('xxxxx.csv')
-    # df = df.loc[:, ['Column0', 'Column1', 'Column2', 'Result']]
-    # main(dataframe=df)
-
-    main()
+    if USE_CSV_DATA:
+        df = pd.read_csv('example_dataset.csv')
+        df = df.loc[:, ['Column0', 'Column1', 'Column2', 'Result']]
+        # Solution: Result = Column2 ** 2 + Column1 / 2 - 3 * Column0
+        main(dataframe=df)
+    else:
+        main()
