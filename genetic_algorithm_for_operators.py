@@ -8,8 +8,8 @@ from deap import algorithms, base, creator, tools
 
 # Search settings.
 NUM_GENERATIONS = 10
-POPULATION_SIZE = 100
-MAX_TERMS = 8  # Maximum number of column references in an expression.
+POPULATION_SIZE = 10
+MAX_TERMS = 4  # Maximum number of column references in an expression.
 MAX_COLUMN_REPEATS = 2  # Each column may appear this many times per expression.
 MAX_COLUMN_CONSTANT = 5  # Integers from 1 to n for column multipliers, divisors or exponents.
 RANDOM_SEED = None  # Different runs; use an integer for reproducible results.
